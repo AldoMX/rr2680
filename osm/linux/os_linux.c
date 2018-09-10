@@ -364,7 +364,11 @@ void refresh_sd_flags(PVBUS_EXT vbus_ext)
 						blkdev_get(bdev, FMODE_READ, 0 __BDEV_RAW)
 #endif
 						==0) {
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,8,0)
+						if (bdev->bd_disk && ((disk_to_dev(bdev->bd_disk)->parent)==&SDptr->sdev_gendev)) {
+#else
 						if (bdev->bd_disk && bdev->bd_disk->driverfs_dev==&SDptr->sdev_gendev) {
+#endif
 							if (vbus_ext->sd_flags[id] & SD_FLAG_REVALIDATE) {
 								if (bdev->bd_disk->fops->revalidate_disk)
 									bdev->bd_disk->fops->revalidate_disk(bdev->bd_disk);
