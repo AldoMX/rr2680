@@ -2477,6 +2477,8 @@ module_exit(exit_this_scsi_driver);
 
 #endif
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,4,10)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,15,0)
+MODULE_LICENSE("GPL");
+#elif LINUX_VERSION_CODE >= KERNEL_VERSION(2,4,10)
 MODULE_LICENSE("Proprietary");
 #endif
