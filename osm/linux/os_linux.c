@@ -368,13 +368,17 @@ void refresh_sd_flags(PVBUS_EXT vbus_ext)
 							if (vbus_ext->sd_flags[id] & SD_FLAG_REVALIDATE) {
 								if (bdev->bd_disk->fops->revalidate_disk)
 									bdev->bd_disk->fops->revalidate_disk(bdev->bd_disk);
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,15)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,7,0)
+								inode_lock(bdev->bd_inode);
+#elif LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,15)
 								mutex_lock(&bdev->bd_inode->i_mutex);
 #else 
 								down(&bdev->bd_inode->i_sem);
 #endif
 								i_size_write(bdev->bd_inode, (loff_t)get_capacity(bdev->bd_disk)<<9);
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,15)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,7,0)
+								inode_unlock(bdev->bd_inode);
+#elif LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,15)
 								mutex_unlock(&bdev->bd_inode->i_mutex);
 #else 
 								up(&bdev->bd_inode->i_sem);
