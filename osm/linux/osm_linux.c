@@ -319,7 +319,11 @@ static int hpt_detect (Scsi_Host_Template *tpnt)
 
 		spin_lock_init(&initlock);
 		vbus_ext->lock = &initlock;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,15,0)
+		timer_setup(&vbus_ext->timer, 0, 0);
+#else
 		init_timer(&vbus_ext->timer);
+#endif
 
 		for (hba = vbus_ext->hba_list; hba; hba = hba->next) {
 			if (!hba->ldm_adapter.him->initialize(hba->ldm_adapter.him_handle)) {
@@ -1573,10 +1577,18 @@ static void hpt_flush_done(PCOMMAND pCmd)
 	up(sem);
 }
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,15,0)
+static void cmd_timeout_sem(struct timer_list *t)
+{
+	PTIMER_SEM ts = from_timer(ts, t, timer);
+	up(&ts->sem);
+}
+#else
 static void cmd_timeout_sem(unsigned long data)
 {
 	up((struct semaphore *)(HPT_UPTR)data);
 }
+#endif
 
 /*
  * flush a vdev (without retry).
@@ -1585,8 +1597,7 @@ static int hpt_flush_vdev(PVBUS_EXT vbus_ext, PVDEV vd)
 {
 	PCOMMAND pCmd;
 	unsigned long flags, timeout;
-	struct timer_list timer;
-	struct semaphore sem;
+	TIMER_SEM ts;
 	int result = 0;
 	HPT_UINT count;
 
@@ -1610,31 +1621,35 @@ static int hpt_flush_vdev(PVBUS_EXT vbus_ext, PVDEV vd)
 	pCmd->type = CMD_TYPE_FLUSH;
 	pCmd->flags.hard_flush = 1;
 	pCmd->target = vd;
-	pCmd->priv2 = (HPT_UPTR)&sem;
+	pCmd->priv2 = (HPT_UPTR)&ts.sem;
 	pCmd->done = hpt_flush_done;
 
-	sema_init(&sem, 0);
+	sema_init(&ts.sem, 0);
 	ldm_queue_cmd(pCmd);
 
 wait:
 	spin_unlock_irqrestore(vbus_ext->lock, flags);
 
-	if (down_trylock(&sem)) {
+	if (down_trylock(&ts.sem)) {
 		timeout = jiffies + 20 * HZ;
-		init_timer(&timer);
-		timer.expires = timeout;
-		timer.data = (HPT_UPTR)&sem;
-		timer.function = cmd_timeout_sem;
-		add_timer(&timer);
-		if (down_interruptible(&sem))
-			down(&sem);
-		del_timer(&timer);
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,15,0)
+		timer_setup(&ts.timer, cmd_timeout_sem, 0);
+#else
+		init_timer(&ts.timer);
+		ts.timer.data = (HPT_UPTR)&ts.sem;
+		ts.timer.function = cmd_timeout_sem;
+#endif
+		ts.timer.expires = timeout;
+		add_timer(&ts.timer);
+		if (down_interruptible(&ts.sem))
+			down(&ts.sem);
+		del_timer(&ts.timer);
 	}
 
 	spin_lock_irqsave(vbus_ext->lock, flags);
 
 	if (pCmd->Result==RETURN_PENDING) {
-		sema_init(&sem, 0);
+		sema_init(&ts.sem, 0);
 		ldm_reset_vbus(vd->vbus);
 		goto wait;
 	}
@@ -1864,16 +1879,23 @@ static void hpt_ioctl_done(struct _IOCTL_ARG *arg)
 	arg->ioctl_cmnd = 0;
 }
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,15,0)
+static void hpt_ioctl_timeout(struct timer_list *t)
+{
+	PTIMER_SEM ts = from_timer(ts, t, timer);
+	up(&ts->sem);
+}
+#else
 static void hpt_ioctl_timeout(unsigned long data)
 {
 	up((struct semaphore *)data);
 }
+#endif
 
 void __hpt_do_ioctl(PVBUS_EXT vbus_ext, IOCTL_ARG *ioctl_args)
 {
 	unsigned long flags, timeout;
-	struct timer_list timer;
-	struct semaphore sem;
+    TIMER_SEM ts;
 
 	if (vbus_ext->needs_refresh
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(2,5,0)
@@ -1886,8 +1908,8 @@ void __hpt_do_ioctl(PVBUS_EXT vbus_ext, IOCTL_ARG *ioctl_args)
 
 	ioctl_args->result = -1;
 	ioctl_args->done = hpt_ioctl_done;
-	ioctl_args->ioctl_cmnd = &sem;
-	sema_init(&sem, 0);
+	ioctl_args->ioctl_cmnd = &ts.sem;
+	sema_init(&ts.sem, 0);
 
 	spin_lock_irqsave(vbus_ext->lock, flags);
 	ldm_ioctl((PVBUS)vbus_ext->vbus, ioctl_args);
@@ -1895,22 +1917,26 @@ void __hpt_do_ioctl(PVBUS_EXT vbus_ext, IOCTL_ARG *ioctl_args)
 wait:
 	spin_unlock_irqrestore(vbus_ext->lock, flags);
 
-	if (down_trylock(&sem)) {
+	if (down_trylock(&ts.sem)) {
 		timeout = jiffies + 20 * HZ;
-		init_timer(&timer);
-		timer.expires = timeout;
-		timer.data = (HPT_UPTR)&sem;
-		timer.function = hpt_ioctl_timeout;
-		add_timer(&timer);
-		if (down_interruptible(&sem))
-			down(&sem);
-		del_timer(&timer);
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,15,0)
+		timer_setup(&ts.timer, hpt_ioctl_timeout, 0);
+#else
+		init_timer(&ts.timer);
+		ts.timer.data = (HPT_UPTR)&ts.sem;
+		ts.timer.function = hpt_ioctl_timeout;
+#endif
+		ts.timer.expires = timeout;
+		add_timer(&ts.timer);
+		if (down_interruptible(&ts.sem))
+			down(&ts.sem);
+		del_timer(&ts.timer);
 	}
 
 	spin_lock_irqsave(vbus_ext->lock, flags);
 
 	if (ioctl_args->ioctl_cmnd) {
-		sema_init(&sem, 0);
+		sema_init(&ts.sem, 0);
 		ldm_reset_vbus((PVBUS)vbus_ext->vbus);
 		__hpt_do_tasks(vbus_ext);
 		goto wait;
